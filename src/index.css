@@ -1,48 +1,59 @@
 @import "tailwindcss";
 
-@layer base {
-  :root {
-    --bg-paper: #FAF9F6;
-    --ink-primary: #1A1918;
-    --ink-secondary: #4A4844;
-    --ink-muted: #797670;
-    --terracotta: #C85A32;
-    --terracotta-dark: #A54420;
-    --terracotta-light: #F6EDE8;
-    --paper-card: #FFFFFF;
-    --paper-card-subtle: #F5F2EB;
-    --border-paper: #E6E1D6;
-    --border-paper-strong: #D1C9BA;
-    --sage: #4E785D;
-    --sage-light: #EDF3EF;
-  }
-
-  body {
-    background-color: var(--bg-paper);
-    color: var(--ink-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    min-height: 100vh;
-    margin: 0;
-    padding: 0;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
+:root {
+  color-scheme: light;
 }
 
-.font-editorial-serif {
-  font-family: "Newsreader", "Georgia", "Cambria", "Times New Roman", serif;
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: #f6f7f9;
+  color: #111827;
+  font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-.paper-shadow {
-  box-shadow: 0 1px 3px rgba(26, 25, 24, 0.05), 0 4px 12px rgba(26, 25, 24, 0.03);
+.font-serif {
+  font-family: "Lora", Georgia, serif;
 }
 
-.paper-shadow-hover:hover {
-  box-shadow: 0 4px 16px rgba(26, 25, 24, 0.08), 0 1px 4px rgba(26, 25, 24, 0.04);
+.font-mono {
+  font-family: "JetBrains Mono", monospace;
 }
 
-.paper-texture {
-  background-color: #FAF9F6;
-  background-image: radial-gradient(#E8E3D7 0.75px, transparent 0.75px);
-  background-size: 24px 24px;
+/* Force React Flow into pure whitish-gray light mode */
+.react-flow,
+.react-flow__renderer,
+.react-flow__pane {
+  background-color: #f6f7f9 !important;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}
+
+.react-flow__handle {
+  opacity: 0;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle,
+.react-flow__handle-connecting {
+  opacity: 1 !important;
+}
+
+.react-flow__edge-path {
+  stroke: #94a3b8;
+  stroke-width: 1.5px;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: #0f62fe !important;
+  stroke-width: 2px !important;
 }

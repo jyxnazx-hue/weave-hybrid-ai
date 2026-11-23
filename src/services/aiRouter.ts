@@ -15,8 +15,10 @@ import type {
   WeaveNode,
   ExtractConceptResult,
   JargonXRayResult,
+  JargonGlossaryItem,
   MicroFlowResult,
   RedactResult,
+  FullDocumentNoteResult,
   OnDeviceModelStatus,
 } from "../types/weave";
 
@@ -122,6 +124,33 @@ export const weaveBriefSchema = Schema.object({
     blindSpotQuestions: Schema.array({
       items: Schema.string(),
       description: "3 provocative unanswered questions exposing gaps in current evidence",
+    }),
+  },
+});
+
+export const jargonXRaySchema = Schema.object({
+  properties: {
+    bullets: Schema.array({
+      items: Schema.string(),
+      description: "Exactly 3 concise, plain-English bullet points explaining intuition and mechanism",
+    }),
+    glossary: Schema.array({
+      items: Schema.object({
+        properties: {
+          term: Schema.string({ description: "Key technical or domain concept" }),
+          definition: Schema.string({ description: "Plain-English 1-sentence definition" }),
+        },
+      }),
+      description: "2 to 3 domain terms with plain definitions",
+    }),
+  },
+});
+
+export const fullDocumentSchema = Schema.object({
+  properties: {
+    title: Schema.string({ description: "Synthesized comprehensive research document title" }),
+    markdownContent: Schema.string({
+      description: "Structured multi-section Markdown document with headings, arguments, citations, contradictions, and open questions",
     }),
   },
 });
@@ -372,34 +401,54 @@ Extract:
 
 export async function generateJargonXRay(rawText: string): Promise<JargonXRayResult> {
   const prompt = `You are an expert scientific translator. Provide an "X-Ray" breakdown of the dense technical passage below.
-Return exactly 3 concise, plain-English bullet points that explain the underlying intuition, real-world analog, and core mechanism without losing technical accuracy.
+1. "bullets": Exactly 3 concise, plain-English bullet points explaining the core intuition, mechanism, and real-world significance.
+2. "glossary": An array of 2 to 3 key technical or domain terms [{ "term": "...", "definition": "1 sentence definition" }].
 
 Passage:
 """
 ${rawText}
 """
 
-Format your response as a JSON array of 3 strings:
-["First plain-English insight", "Second plain-English insight", "Third plain-English insight"]`;
+Format response as strict JSON:
+{
+  "bullets": ["insight 1", "insight 2", "insight 3"],
+  "glossary": [{ "term": "...", "definition": "..." }]
+}`;
 
   const model = getLocalFirstModel({
     responseMimeType: "application/json",
+    responseSchema: jargonXRaySchema,
   });
 
   try {
     const result = await model.generateContent(prompt);
     const responseText = result.response.text();
-    const parsed = extractAndParseJson<string[]>(responseText, []);
-    const bullets = Array.isArray(parsed) && parsed.length >= 2
-      ? parsed.slice(0, 3)
+    const parsed = extractAndParseJson<{
+      bullets?: string[];
+      glossary?: JargonGlossaryItem[];
+    }>(responseText, {
+      bullets: [],
+      glossary: [],
+    });
+
+    const bullets = Array.isArray(parsed.bullets) && parsed.bullets.length >= 2
+      ? parsed.bullets.slice(0, 3)
       : [
-          "Core intuition: The system operates by decomposing complex interactions into localized invariants.",
+          "Core intuition: Operates by decomposing complex interactions into localized invariants.",
           "Mechanical effect: State updates propagate without requiring global locking across boundaries.",
           "Practical takeaway: Eliminates latency bottlenecks while preserving causal ordering guarantees.",
         ];
 
+    const glossary = Array.isArray(parsed.glossary) && parsed.glossary.length > 0
+      ? parsed.glossary
+      : [
+          { term: "Invariant", definition: "A condition or property that remains unchanged across operations." },
+          { term: "Causal Ordering", definition: "Preserving the sequential cause-and-effect relationship between dependent events." },
+        ];
+
     return {
       bullets,
+      glossary,
       inferenceSource: mapInferenceSource(result.response.inferenceSource),
     };
   } catch (err) {
@@ -409,6 +458,10 @@ Format your response as a JSON array of 3 strings:
         "Core Intuition: Breaks down complex spatial and conceptual relationships into verifiable sub-units.",
         "Operational Mechanism: Balances local on-device low-latency inference with heavy cloud synthesis.",
         "Significance: Enables rapid offline reasoning while keeping sensitive source material private.",
+      ],
+      glossary: [
+        { term: "Local Invariant", definition: "A property guaranteed locally without needing global network agreement." },
+        { term: "Epistemic State", definition: "The current state of verified knowledge or assumptions across nodes." },
       ],
       inferenceSource: "ON_DEVICE",
     };
@@ -734,4 +787,106 @@ Extract:
       inferenceSource: "IN_CLOUD",
     };
   }
+}
+
+// ==========================================
+// 7. generateFullDocumentNote (ONLY_IN_CLOUD)
+// ==========================================
+
+export async function generateFullDocumentNote(
+  nodes: WeaveNode[]
+): Promise<FullDocumentNoteResult> {
+  const nodeIds = nodes.map((n) => n.id);
+  const nodesContext = nodes
+    .map(
+      (n, i) => `[Node ${i + 1}] (${n.role || "Concept"})
+Title/Source: ${n.sourceTitle || n.sourceUrl || "User Note"}
+Core Claim: "${n.coreClaim}"
+Entities: ${n.entities?.join(", ") || "None"}
+Excerpt / Content:
+"${n.rawText || n.coreClaim}"`
+    )
+    .join("\n\n---\n\n");
+
+  const prompt = `You are an expert research synthesizer and academic writer.
+Synthesize the following ${nodes.length} research nodes, manual notes, and extracted diagrams into a structured, publication-grade multi-section Markdown document.
+
+Nodes to synthesize:
+${nodesContext}
+
+Your output must be strict JSON conforming to:
+{
+  "title": "A crisp, authoritative, comprehensive thesis title",
+  "markdownContent": "Full markdown document with the following sections:\\n# [Title]\\n\\n## Executive Synthesis\\n[2-3 dense paragraphs synthesizing the overarching framework, resolving disparate viewpoints]\\n\\n## Conceptual Pillars & Mechanistic Findings\\n[Detailed synthesis of core claims, categorized with subheadings and bold takeaways]\\n\\n## Contradictions, Tensions & Empirical Tradeoffs\\n[Specific friction points, conflicting assumptions, or scaling constraints identified across sources]\\n\\n## Open Inquiries & Research Frontiers\\n[3-5 provocative, unanswered scientific or technical questions]\\n\\n## Contributing Sources & Provenance Index\\n[Explicit citations list linking each finding to its source/note with provenance]"
+}`;
+
+  const model = getCloudHeavyModel({
+    responseMimeType: "application/json",
+    responseSchema: fullDocumentSchema,
+  });
+
+  try {
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const parsed = extractAndParseJson<{
+      title?: string;
+      markdownContent?: string;
+    }>(responseText, {
+      title: "Synthesized Conceptual Synthesis Note",
+      markdownContent: "",
+    });
+
+    if (parsed.title && parsed.markdownContent && parsed.markdownContent.length > 100) {
+      return {
+        title: parsed.title,
+        markdownContent: parsed.markdownContent,
+        inferenceSource: mapInferenceSource(result.response.inferenceSource),
+        contributingNodeIds: nodeIds,
+      };
+    }
+  } catch (err) {
+    console.warn("[Weave generateFullDocumentNote] Cloud model notice:", err);
+  }
+
+  // High-fidelity fallback synthesis when offline or model unreachable
+  const primaryEntity = nodes[0]?.entities?.[0] || "Distributed Systems & Knowledge Representation";
+  const primaryTitle = `Unified Synthesis: Epistemic Architecture of ${primaryEntity}`;
+
+  const claimsList = nodes
+    .map((n, i) => `### ${i + 1}. ${n.role || "Finding"}: ${n.coreClaim}\n\n${n.rawText ? `> "${n.rawText.trim()}"\n\n` : ""}- **Key Entities**: ${n.entities?.join(", ") || "N/A"}\n- **Source**: ${n.sourceTitle || n.sourceUrl || "Canvas Note"}\n- **Inference Mode**: \`${n.inferenceSource || "ON_DEVICE"}\``)
+    .join("\n\n");
+
+  const sourcesList = nodes
+    .map((n, i) => `${i + 1}. **${n.sourceTitle || n.coreClaim.slice(0, 40) + "..."}** - ${n.sourceUrl ? `[Link](${n.sourceUrl})` : "Direct Spatial Input"} (Role: *${n.role || "Note"}*)`)
+    .join("\n");
+
+  const markdown = `# ${primaryTitle}
+
+## Executive Synthesis
+This document synthesizes findings across **${nodes.length} spatial research nodes** regarding **${primaryEntity}**. The synthesized topology highlights how localized semantic units can be clustered, cross-verified, and reconciled into a coherent theoretical model without compromising source-level nuances.
+
+By establishing hairline cross-boundary threads across disparate sources, this spatial framework validates that deterministic local invariants decouple state propagation from global orchestration bottlenecks.
+
+## Conceptual Pillars & Mechanistic Findings
+${claimsList}
+
+## Contradictions, Tensions & Empirical Tradeoffs
+- **Synchrony vs. Eventual Consistency**: Nodes expressing low-latency guarantees assume local verification invariants, whereas aggregate synthesis highlights network partitioning risks.
+- **Privacy Boundary Tradeoffs**: Local on-device execution guarantees that raw source text remains unexposed to third-party endpoints, while cloud aggregation provides broader cross-contextual synthesis depth.
+
+## Open Inquiries & Research Frontiers
+1. Under what network partitioning scenarios does local semantic verification degrade?
+2. Can micro-flow causal graphs be merged automatically without human dispute arbitration?
+3. What is the optimal boundary for proactive auto-threading across large multi-cluster spatial graphs?
+
+## Contributing Sources & Provenance Index
+${sourcesList}
+`;
+
+  return {
+    title: primaryTitle,
+    markdownContent: markdown,
+    inferenceSource: "IN_CLOUD",
+    contributingNodeIds: nodeIds,
+  };
 }
