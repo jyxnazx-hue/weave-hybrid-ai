@@ -890,3 +890,24 @@ ${sourcesList}
     contributingNodeIds: nodeIds,
   };
 }
+
+export async function runInlineCursorAI(
+  text: string,
+  action: "sharpen" | "counter" | "bullets" | "continue"
+): Promise<string> {
+  const instructions: Record<typeof action, string> = {
+    sharpen:
+      "Rewrite this note or claim so it is sharper, clearer, and more concise. Return ONLY the rewritten text, no preamble:",
+    counter:
+      "Provide a concise 2-sentence intellectual counter-argument or alternative perspective challenging this idea. Return ONLY the counter-argument:",
+    bullets:
+      "Convert this text into 3 crisp, scannable bullet points starting with '• '. Return ONLY the bullets:",
+    continue:
+      "Continue this thought naturally in 2 concise, insightful sentences matching the same tone. Return ONLY the continuation:",
+  };
+
+  const result = await getLocalFirstModel().generateContent(
+    `${instructions[action]}\n\n"""\n${text}\n"""`
+  );
+  return result.response.text().trim();
+}

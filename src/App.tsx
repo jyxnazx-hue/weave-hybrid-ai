@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addEdge,
-  Background,
-  BackgroundVariant,
   type Connection,
   ConnectionMode,
   type Edge,
@@ -19,6 +17,7 @@ import { get, set } from "idb-keyval";
 import {
   Copy,
   Crosshair,
+  ExternalLink,
   FileText,
   FolderPlus,
   Hand,
@@ -32,6 +31,7 @@ import {
   Plus,
   Quote,
   RotateCcw,
+  Sparkles,
   StickyNote,
   Trash2,
   X,
@@ -45,14 +45,15 @@ import {
   generateFullDocumentNote,
   generateJargonXRay,
   generateMicroFlow,
+  runInlineCursorAI,
 } from "./services/aiRouter";
 import { clusterNodesByTopic, computeAutoThreadsForNode } from "./services/canvasLogic";
-import { CanvasCard } from "./components/CanvasCard";
+import { CARD_TINTS, CanvasCard, type CardTintKey } from "./components/CanvasCard";
 import { DocumentEditor } from "./components/DocumentEditor";
 import { LibrarySidebar } from "./components/LibrarySidebar";
 import type { WeaveNode } from "./types/weave";
 
-const STORAGE_KEY = "weave-infinite-canvas-v2";
+const STORAGE_KEY = "weave-infinite-canvas-v3";
 
 const nodeTypes = {
   concept: CanvasCard,
@@ -62,16 +63,29 @@ const nodeTypes = {
   frame: CanvasCard,
 };
 
+const EDGE_RELATIONS = [
+  { label: "supports", dash: undefined, color: "#374151" },
+  { label: "contradicts", dash: "5 4", color: "#111827" },
+  { label: "leads to", dash: undefined, color: "#4B5563" },
+  { label: "analogy", dash: "2 3", color: "#6B7280" },
+];
+
 interface ContextMenuState {
   x: number;
   y: number;
   flowX: number;
   flowY: number;
   nodeId?: string;
+  edgeId?: string;
 }
 
 function WeaveWorkspace() {
   const { zoomIn, zoomOut, zoomTo, fitView, screenToFlowPosition, setCenter } = useReactFlow();
+
+  const isSidePanel = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("mode") === "sidepanel";
+  }, []);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -123,13 +137,118 @@ function WeaveWorkspace() {
         onDuplicateNode,
         onRunXRay,
         onRunFlow,
+        onExpandWithAI,
+        onOpenNoteInEditor,
         onOpenDocument,
         ...serializableData
       } = (n.data || {}) as Record<string, unknown>;
       return { ...n, data: serializableData };
     });
     set(STORAGE_KEY, { nodes: cleanNodes, edges }).catch(() => {});
+    if (typeof BroadcastChannel !== "undefined") {
+  const ch = new BroadcastChannel("weave-sync-channel");
+  ch.postMessage({ type: "SYNC_STATE", nodes: cleanNodes, edges });
+  ch.close();
+}
   }, [nodes, edges, hydrated]);
+
+// Live cross-tab sync between Chrome Side Panel and Full Spatial Canvas
+useEffect(() => {
+  const channel =
+    typeof BroadcastChannel !== "undefined"
+      ? new BroadcastChannel("weave-sync-channel")
+      : null;
+
+  if (channel) {
+    channel.onmessage = (event) => {
+      if (event.data?.type === "SYNC_STATE") {
+        if (Array.isArray(event.data.nodes)) setNodes(event.data.nodes);
+        if (Array.isArray(event.data.edges)) setEdges(event.data.edges);
+      }
+    };
+  }
+
+  // Listen for Alt+W pending webpage selection captured by background.js
+  const chromeApi = (window as unknown as { chrome?: any }).chrome;
+  const processPendingClip = async (pending: {
+    text?: string;
+    title?: string;
+    url?: string;
+  }) => {
+    if (!pending?.text) return;
+    setClipText(pending.text);
+    setClipTitle(pending.title || "");
+    setClipUrl(pending.url || "");
+    chromeApi?.storage?.local?.remove?.("weave_pending_clip");
+  };
+
+  if (chromeApi?.storage?.local) {
+    chromeApi.storage.local.get("weave_pending_clip", (res: any) => {
+      if (res?.weave_pending_clip) processPendingClip(res.weave_pending_clip);
+    });
+    const listener = (changes: any, area: string) => {
+      if (area === "local" && changes.weave_pending_clip?.newValue) {
+        processPendingClip(changes.weave_pending_clip.newValue);
+      }
+    };
+    chromeApi.storage.onChanged.addListener(listener);
+    return () => {
+      channel?.close();
+      chromeApi.storage.onChanged.removeListener(listener);
+    };
+  }
+
+  return () => channel?.close();
+}, [setNodes, setEdges]);
+
+// Live cross-tab sync between Chrome Side Panel and Full Spatial Canvas
+useEffect(() => {
+  const channel =
+    typeof BroadcastChannel !== "undefined"
+      ? new BroadcastChannel("weave-sync-channel")
+      : null;
+
+  if (channel) {
+    channel.onmessage = (event) => {
+      if (event.data?.type === "SYNC_STATE") {
+        if (Array.isArray(event.data.nodes)) setNodes(event.data.nodes);
+        if (Array.isArray(event.data.edges)) setEdges(event.data.edges);
+      }
+    };
+  }
+
+  // Listen for Alt+W pending webpage selection captured by background.js
+  const chromeApi = (window as unknown as { chrome?: any }).chrome;
+  const processPendingClip = async (pending: {
+    text?: string;
+    title?: string;
+    url?: string;
+  }) => {
+    if (!pending?.text) return;
+    setClipText(pending.text);
+    setClipTitle(pending.title || "");
+    setClipUrl(pending.url || "");
+    chromeApi?.storage?.local?.remove?.("weave_pending_clip");
+  };
+
+  if (chromeApi?.storage?.local) {
+    chromeApi.storage.local.get("weave_pending_clip", (res: any) => {
+      if (res?.weave_pending_clip) processPendingClip(res.weave_pending_clip);
+    });
+    const listener = (changes: any, area: string) => {
+      if (area === "local" && changes.weave_pending_clip?.newValue) {
+        processPendingClip(changes.weave_pending_clip.newValue);
+      }
+    };
+    chromeApi.storage.onChanged.addListener(listener);
+    return () => {
+      channel?.close();
+      chromeApi.storage.onChanged.removeListener(listener);
+    };
+  }
+
+  return () => channel?.close();
+}, [setNodes, setEdges]);
 
   // Keyboard shortcuts (V = Select, H = Hand Pan)
   useEffect(() => {
@@ -145,7 +264,7 @@ function WeaveWorkspace() {
   }, []);
 
   // ==========================================
-  // Node Mutations
+  // Node & Edge Mutations
   // ==========================================
 
   const handleUpdateNode = useCallback(
@@ -217,6 +336,79 @@ function WeaveWorkspace() {
     [nodes, handleUpdateNode]
   );
 
+  // Ask AI to expand & structure a manual note
+  const handleExpandWithAI = useCallback(
+    async (nodeId: string) => {
+      const target = nodes.find((n) => n.id === nodeId);
+      if (!target) return;
+      const currentBody =
+        (target.data.content as string) || (target.data.coreClaim as string) || "";
+      if (!currentBody.trim()) return;
+      const xray = await generateJargonXRay(currentBody);
+      const expanded = `${currentBody.trim()}\n\n— AI Key Takeaways —\n${xray.bullets
+        .map((b) => `• ${b}`)
+        .join("\n")}`;
+      handleUpdateNode(nodeId, { content: expanded });
+    },
+    [nodes, handleUpdateNode]
+  );
+
+  // Promote any single note or concept card into the Full-Space Document Editor
+  const handleOpenNoteInEditor = useCallback(
+    (nodeId: string) => {
+      const target = nodes.find((n) => n.id === nodeId);
+      if (!target) return;
+      if (target.type === "document") {
+        setActiveDocumentId(nodeId);
+        return;
+      }
+      const d = target.data as Record<string, unknown>;
+      const title = (d.title as string) || (d.sourceTitle as string) || "Research Note";
+      const body =
+        (d.content as string) ||
+        (d.rawText as string) ||
+        (d.coreClaim as string) ||
+        "";
+      handleUpdateNode(nodeId, {
+        nodeType: "document",
+        title,
+        markdownContent: (d.markdownContent as string) || `# ${title}\n\n${body}`,
+        contributingNodeIds: [],
+        contributingNodes: [],
+        updatedAt: Date.now(),
+      });
+      setNodes((nds) =>
+        nds.map((n) => (n.id === nodeId ? { ...n, type: "document" } : n))
+      );
+      setActiveDocumentId(nodeId);
+    },
+    [nodes, handleUpdateNode, setNodes]
+  );
+
+  const handleUpdateEdgeRelation = useCallback(
+    (edgeId: string, relation: string, dash?: string, color = "#1f2937") => {
+      setEdges((eds) =>
+        eds.map((e) =>
+          e.id === edgeId
+            ? {
+                ...e,
+                label: relation,
+                style: { stroke: color, strokeWidth: 1.6, strokeDasharray: dash },
+                labelStyle: {
+                  fill: "#111827",
+                  fontSize: 10,
+                  fontWeight: 500,
+                  fontFamily: "Plus Jakarta Sans, sans-serif",
+                },
+                labelBgStyle: { fill: "#ffffff", fillOpacity: 0.95 },
+              }
+            : e
+        )
+      );
+    },
+    [setEdges]
+  );
+
   // ==========================================
   // Creation Actions
   // ==========================================
@@ -229,7 +421,7 @@ function WeaveWorkspace() {
   }, [screenToFlowPosition, sidebarOpen]);
 
   const createBlankNote = useCallback(
-    (atPos?: { x: number; y: number }) => {
+    (atPos?: { x: number; y: number }, tint: CardTintKey = "white") => {
       const pos = atPos || getViewportCenter();
       const id = `note-${Date.now()}`;
       const newNode: Node = {
@@ -241,6 +433,7 @@ function WeaveWorkspace() {
           id,
           title: "Note",
           content: "",
+          tint,
           createdAt: Date.now(),
         },
       };
@@ -316,6 +509,7 @@ function WeaveWorkspace() {
           coreClaim: extracted.coreClaim,
           role: extracted.role,
           entities: extracted.entities,
+          tint: "white",
           inferenceSource: extracted.inferenceSource,
           createdAt: Date.now(),
         },
@@ -360,6 +554,7 @@ function WeaveWorkspace() {
           role: extracted.role,
           entities: extracted.entities,
           microFlow: extracted.microFlow,
+          tint: "white",
           inferenceSource: extracted.inferenceSource,
           createdAt: Date.now(),
         },
@@ -453,6 +648,7 @@ function WeaveWorkspace() {
           markdownContent: docResult.markdownContent,
           contributingNodeIds: docResult.contributingNodeIds,
           contributingNodes: prepared,
+          tint: "white",
           inferenceSource: docResult.inferenceSource,
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -467,7 +663,7 @@ function WeaveWorkspace() {
   };
 
   // ==========================================
-  // Smooth Loose Connections & Context Menu
+  // Connections & Context Menus
   // ==========================================
 
   const onConnect = useCallback(
@@ -478,7 +674,15 @@ function WeaveWorkspace() {
           {
             ...connection,
             type: "default",
-            style: { stroke: "#0F62FE", strokeWidth: 1.6 },
+            label: "supports",
+            style: { stroke: "#374151", strokeWidth: 1.6 },
+            labelStyle: {
+              fill: "#111827",
+              fontSize: 10,
+              fontWeight: 500,
+              fontFamily: "Plus Jakarta Sans, sans-serif",
+            },
+            labelBgStyle: { fill: "#ffffff", fillOpacity: 0.95 },
           },
           eds
         )
@@ -548,6 +752,20 @@ function WeaveWorkspace() {
     [screenToFlowPosition]
   );
 
+  const handleEdgeContextMenu = useCallback(
+    (e: React.MouseEvent, edge: Edge) => {
+      e.preventDefault();
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        flowX: 0,
+        flowY: 0,
+        edgeId: edge.id,
+      });
+    },
+    []
+  );
+
   // ==========================================
   // Focus Mode & Search Filtering
   // ==========================================
@@ -600,6 +818,9 @@ function WeaveWorkspace() {
           onDuplicateNode: handleDuplicateNode,
           onRunXRay: handleRunXRay,
           onRunFlow: handleRunFlow,
+          onRunInlineAI: runInlineCursorAI,
+          onExpandWithAI: handleExpandWithAI,
+          onOpenNoteInEditor: handleOpenNoteInEditor,
           onOpenDocument: (docId: string) => setActiveDocumentId(docId),
         },
       };
@@ -615,7 +836,79 @@ function WeaveWorkspace() {
     handleDuplicateNode,
     handleRunXRay,
     handleRunFlow,
+    handleExpandWithAI,
+    handleOpenNoteInEditor,
   ]);
+
+  // ==========================================
+  // Compact Chrome Side Panel View (?mode=sidepanel)
+  // ==========================================
+  if (isSidePanel) {
+    const fullCanvasUrl =
+      (window as unknown as { chrome?: any }).chrome?.runtime?.getURL?.("index.html") ||
+      window.location.origin;
+
+    return (
+      <div className="flex h-screen w-screen flex-col bg-[#F9FAFB] text-[#111827]">
+        <header className="flex items-center justify-between border-b border-[#E5E7EB] bg-white px-4 py-3">
+          <span className="font-serif text-base font-semibold text-[#111827]">
+            Weave
+          </span>
+          <a
+            href={fullCanvasUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-lg bg-[#1f2937] px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+          >
+            Open Canvas <ExternalLink className="h-3 w-3" />
+          </a>
+        </header>
+
+        <form onSubmit={handleExtractClip} className="border-b border-[#E5E7EB] bg-white p-3 space-y-2">
+          <textarea
+            rows={3}
+            value={clipText}
+            onChange={(e) => setClipText(e.target.value)}
+            placeholder="Paste or highlight text to capture..."
+            className="w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-2.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:border-[#1f2937] focus:bg-white focus:outline-none"
+          />
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              value={clipTitle}
+              onChange={(e) => setClipTitle(e.target.value)}
+              placeholder="Source title..."
+              className="flex-1 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2.5 py-1 text-xs focus:border-[#1f2937] focus:bg-white focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={isExtractingClip || !clipText.trim()}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#1f2937] px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {isExtractingClip ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+              Capture
+            </button>
+          </div>
+        </form>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {nodes.filter((n) => n.type !== "frame").map((n) => {
+            const d = n.data as Record<string, unknown>;
+            return (
+              <div key={n.id} className="rounded-xl border border-[#E5E7EB] bg-white p-3 text-xs">
+                <div className="font-semibold text-[#374151]">
+                  {(d.sourceTitle as string) || (d.title as string) || "Note"}
+                </div>
+                <p className="mt-1 font-serif text-[#111827]">
+                  {(d.coreClaim as string) || (d.content as string)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   const activeDocumentNode = useMemo(
     () => nodes.find((n) => n.id === activeDocumentId),
@@ -642,6 +935,7 @@ function WeaveWorkspace() {
             updatedAt: Date.now(),
           })
         }
+        onRunInlineAI={runInlineCursorAI}
         onBackToCanvas={() => setActiveDocumentId(null)}
       />
     );
@@ -649,13 +943,13 @@ function WeaveWorkspace() {
 
   return (
     <div
-      className="relative h-screen w-screen overflow-hidden bg-[#F6F7F9]"
+      className="relative h-screen w-screen overflow-hidden bg-[#F9FAFB]"
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleCanvasDrop}
       onClick={() => contextMenu && setContextMenu(null)}
     >
       {/* Top-Left Minimal Wordmark */}
-      <div className="fixed left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-[#E2E5EC] bg-white/95 px-3.5 py-2 shadow-xs backdrop-blur-sm">
+      <div className="fixed left-4 top-4 z-20 flex items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white/95 px-3.5 py-2 shadow-xs backdrop-blur-sm">
         <span className="font-serif text-base font-semibold tracking-tight text-[#111827]">
           Weave
         </span>
@@ -663,45 +957,45 @@ function WeaveWorkspace() {
 
       {/* Top-Right Library Toggle + Vertical Canvas Controls */}
       {!sidebarOpen && (
-        <div className="fixed right-4 top-4 z-20 flex flex-col overflow-hidden rounded-xl border border-[#E2E5EC] bg-white/95 shadow-xs backdrop-blur-sm">
+        <div className="fixed right-4 top-4 z-20 flex flex-col overflow-hidden rounded-xl border border-[#E5E7EB] bg-white/95 shadow-xs backdrop-blur-sm">
           <button
             onClick={() => setSidebarOpen(true)}
             title="Open Library & Search"
-            className="border-b border-[#ECEEF2] p-2.5 text-[#374151] transition-colors hover:bg-[#F3F4F6] hover:text-[#0F62FE]"
+            className="border-b border-[#F3F4F6] p-2.5 text-[#374151] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <PanelRight className="h-4 w-4" />
           </button>
           <button
             onClick={() => zoomIn()}
             title="Zoom In"
-            className="border-b border-[#ECEEF2] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
+            className="border-b border-[#F3F4F6] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <ZoomIn className="h-4 w-4" />
           </button>
           <button
             onClick={() => zoomTo(1)}
             title="Reset Zoom (100%)"
-            className="border-b border-[#ECEEF2] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
+            className="border-b border-[#F3F4F6] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <RotateCcw className="h-4 w-4" />
           </button>
           <button
             onClick={() => fitView({ padding: 0.2 })}
             title="Fit View"
-            className="border-b border-[#ECEEF2] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
+            className="border-b border-[#F3F4F6] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <Maximize2 className="h-4 w-4" />
           </button>
           <button
             onClick={() => zoomOut()}
             title="Zoom Out"
-            className="border-b border-[#ECEEF2] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
+            className="border-b border-[#F3F4F6] p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <ZoomOut className="h-4 w-4" />
           </button>
           <button
             onClick={() => setShowShortcuts(true)}
-            title="Shortcuts & Tips"
+            title="Workspace Guide"
             className="p-2.5 text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#111827]"
           >
             <HelpCircle className="h-4 w-4" />
@@ -721,16 +1015,16 @@ function WeaveWorkspace() {
         onCreateBlankDocument={createBlankDocument}
       />
 
-      {/* Clean Top-Center Synthesis Pill When Frame or Multiple Cards Are Selected */}
+      {/* Top-Center Synthesis Pill When Frame or Multiple Cards Are Selected */}
       {cardsForSynthesis.length > 0 && (
-        <div className="fixed top-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[#E2E5EC] bg-white px-4 py-1.5 shadow-md">
+        <div className="fixed top-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[#E5E7EB] bg-white px-4 py-1.5 shadow-md">
           <span className="text-xs font-medium text-[#4B5563]">
             {cardsForSynthesis.length} {cardsForSynthesis.length === 1 ? "item" : "items"} selected
           </span>
           <button
             disabled={isSynthesizing}
             onClick={handleSynthesizeFullNote}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[#0F62FE] px-3.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#1f2937] px-3.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {isSynthesizing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -742,15 +1036,14 @@ function WeaveWorkspace() {
         </div>
       )}
 
-      {/* Bottom-Center Floating Toolbar (tldraw / Modern Canvas Style with Select & Pan Cursors) */}
-      <div className="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-2xl border border-[#E2E5EC] bg-white/95 px-2 py-1.5 shadow-md backdrop-blur-sm">
-        {/* Cursor Mode Switcher */}
+      {/* Bottom-Center Google-Inspired Floating Toolbar (Dark Gray Active Accent) */}
+      <div className="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-2xl border border-[#E5E7EB] bg-white/95 px-2 py-1.5 shadow-md backdrop-blur-sm">
         <button
           onClick={() => setToolMode("select")}
           title="Select & Box-Select (V)"
           className={`rounded-xl p-2 transition-colors ${
             toolMode === "select"
-              ? "bg-[#0F62FE] text-white"
+              ? "bg-[#1f2937] text-white"
               : "text-[#4B5563] hover:bg-[#F3F4F6]"
           }`}
         >
@@ -762,7 +1055,7 @@ function WeaveWorkspace() {
           title="Hand Pan Tool (H)"
           className={`rounded-xl p-2 transition-colors ${
             toolMode === "pan"
-              ? "bg-[#0F62FE] text-white"
+              ? "bg-[#1f2937] text-white"
               : "text-[#4B5563] hover:bg-[#F3F4F6]"
           }`}
         >
@@ -771,12 +1064,11 @@ function WeaveWorkspace() {
 
         <div className="mx-1 h-5 w-px bg-[#E5E7EB]" />
 
-        {/* Creation Actions */}
         <button
           onClick={() => createBlankNote()}
           className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#111827] transition-colors hover:bg-[#F3F4F6]"
         >
-          <StickyNote className="h-3.5 w-3.5 text-[#4B5563]" />
+          <StickyNote className="h-3.5 w-3.5 text-[#374151]" />
           Note
         </button>
 
@@ -784,7 +1076,7 @@ function WeaveWorkspace() {
           onClick={() => setClipModalOpen(true)}
           className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#111827] transition-colors hover:bg-[#F3F4F6]"
         >
-          <Quote className="h-3.5 w-3.5 text-[#0F62FE]" />
+          <Quote className="h-3.5 w-3.5 text-[#374151]" />
           Clip
         </button>
 
@@ -792,7 +1084,7 @@ function WeaveWorkspace() {
           onClick={() => imageInputRef.current?.click()}
           className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#111827] transition-colors hover:bg-[#F3F4F6]"
         >
-          <ImageIcon className="h-3.5 w-3.5 text-[#4B5563]" />
+          <ImageIcon className="h-3.5 w-3.5 text-[#374151]" />
           Diagram
         </button>
 
@@ -800,13 +1092,12 @@ function WeaveWorkspace() {
           onClick={() => createSpatialFrame()}
           className="inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium text-[#111827] transition-colors hover:bg-[#F3F4F6]"
         >
-          <FolderPlus className="h-3.5 w-3.5 text-[#4B5563]" />
+          <FolderPlus className="h-3.5 w-3.5 text-[#374151]" />
           Frame
         </button>
 
         <div className="mx-1 h-5 w-px bg-[#E5E7EB]" />
 
-        {/* Spatial Organization */}
         <button
           onClick={() => setNodes((nds) => clusterNodesByTopic(nds))}
           title="Group related cards by topic"
@@ -821,7 +1112,7 @@ function WeaveWorkspace() {
           title="Focus on selected card and its connected thread"
           className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium transition-colors ${
             focusModeActive
-              ? "bg-[#111827] text-white"
+              ? "bg-[#1f2937] text-white"
               : "text-[#4B5563] hover:bg-[#F3F4F6] hover:text-[#111827]"
           }`}
         >
@@ -830,15 +1121,84 @@ function WeaveWorkspace() {
         </button>
       </div>
 
-      {/* Right-Click Context Menu */}
+      {/* Rich Right-Click Context Menu (Canvas, Cards, and Connectors) */}
       {contextMenu && (
         <div
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-48 rounded-xl border border-[#E2E5EC] bg-white p-1.5 text-xs text-[#111827] shadow-lg"
+          className="fixed z-50 w-52 rounded-xl border border-[#E5E7EB] bg-white p-1.5 text-xs text-[#111827] shadow-lg"
         >
-          {contextMenu.nodeId ? (
+          {contextMenu.edgeId ? (
             <>
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
+                Relationship Type
+              </div>
+              {EDGE_RELATIONS.map((rel) => (
+                <button
+                  key={rel.label}
+                  onClick={() => {
+                    handleUpdateEdgeRelation(contextMenu.edgeId!, rel.label, rel.dash, rel.color);
+                    setContextMenu(null);
+                  }}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left capitalize hover:bg-[#F3F4F6]"
+                >
+                  <span>{rel.label}</span>
+                  <span className="font-mono text-[10px] text-[#9CA3AF]">
+                    {rel.dash ? "- - -" : "───"}
+                  </span>
+                </button>
+              ))}
+              <div className="my-1 h-px bg-[#F3F4F6]" />
+              <button
+                onClick={() => {
+                  setEdges((eds) => eds.filter((e) => e.id !== contextMenu.edgeId));
+                  setContextMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[#DC2626] hover:bg-[#FEE2E2]"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove Connection
+              </button>
+            </>
+          ) : contextMenu.nodeId ? (
+            <>
+              <button
+                onClick={() => {
+                  handleOpenNoteInEditor(contextMenu.nodeId!);
+                  setContextMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
+              >
+                <Maximize2 className="h-3.5 w-3.5 text-[#374151]" />
+                Open in Full Editor
+              </button>
+              <button
+                onClick={() => {
+                  handleExpandWithAI(contextMenu.nodeId!);
+                  setContextMenu(null);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-[#374151]" />
+                Ask AI to Expand
+              </button>
+              <div className="my-1 h-px bg-[#F3F4F6]" />
+              <div className="flex items-center justify-between px-2.5 py-1">
+                <span className="text-[11px] text-[#6B7280]">Card Color</span>
+                <div className="flex items-center gap-1">
+                  {(Object.keys(CARD_TINTS) as CardTintKey[]).map((key) => (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        handleUpdateNode(contextMenu.nodeId!, { tint: key });
+                        setContextMenu(null);
+                      }}
+                      className={`h-3 w-3 rounded-full border ${CARD_TINTS[key].swatch}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="my-1 h-px bg-[#F3F4F6]" />
               <button
                 onClick={() => {
                   handleDuplicateNode(contextMenu.nodeId!);
@@ -847,7 +1207,7 @@ function WeaveWorkspace() {
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
               >
                 <Copy className="h-3.5 w-3.5 text-[#6B7280]" />
-                Duplicate Card
+                Duplicate
               </button>
               <button
                 onClick={() => {
@@ -857,7 +1217,7 @@ function WeaveWorkspace() {
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[#DC2626] hover:bg-[#FEE2E2]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Delete Card
+                Delete
               </button>
             </>
           ) : (
@@ -869,7 +1229,7 @@ function WeaveWorkspace() {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
               >
-                <StickyNote className="h-3.5 w-3.5 text-[#6B7280]" />
+                <StickyNote className="h-3.5 w-3.5 text-[#374151]" />
                 New Note Here
               </button>
               <button
@@ -879,7 +1239,7 @@ function WeaveWorkspace() {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
               >
-                <Quote className="h-3.5 w-3.5 text-[#0F62FE]" />
+                <Quote className="h-3.5 w-3.5 text-[#374151]" />
                 Clip Text
               </button>
               <button
@@ -889,7 +1249,7 @@ function WeaveWorkspace() {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
               >
-                <ImageIcon className="h-3.5 w-3.5 text-[#6B7280]" />
+                <ImageIcon className="h-3.5 w-3.5 text-[#374151]" />
                 Upload Diagram
               </button>
               <button
@@ -899,10 +1259,10 @@ function WeaveWorkspace() {
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-[#F3F4F6]"
               >
-                <FolderPlus className="h-3.5 w-3.5 text-[#6B7280]" />
+                <FolderPlus className="h-3.5 w-3.5 text-[#374151]" />
                 New Spatial Frame
               </button>
-              <div className="my-1 h-px bg-[#ECEEF2]" />
+              <div className="my-1 h-px bg-[#F3F4F6]" />
               <button
                 onClick={() => {
                   setNodes((nds) => clusterNodesByTopic(nds));
@@ -942,7 +1302,7 @@ function WeaveWorkspace() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
           <form
             onSubmit={handleExtractClip}
-            className="w-full max-w-md rounded-2xl border border-[#E2E5EC] bg-white p-5 shadow-xl"
+            className="w-full max-w-md rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-xl"
           >
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-[#111827]">
@@ -964,8 +1324,8 @@ function WeaveWorkspace() {
                 rows={4}
                 value={clipText}
                 onChange={(e) => setClipText(e.target.value)}
-                placeholder="Paste highlighted text from an article, paper, or note..."
-                className="w-full resize-none rounded-xl border border-[#E2E5EC] bg-[#F6F7F9] p-3 text-xs leading-relaxed text-[#111827] placeholder-[#9CA3AF] focus:border-[#0F62FE] focus:bg-white focus:outline-none"
+                placeholder="Paste highlighted text from an article, paper, or book..."
+                className="w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-3 text-xs leading-relaxed text-[#111827] placeholder-[#9CA3AF] focus:border-[#1f2937] focus:bg-white focus:outline-none"
               />
               <div className="grid grid-cols-2 gap-2">
                 <input
@@ -973,14 +1333,14 @@ function WeaveWorkspace() {
                   value={clipTitle}
                   onChange={(e) => setClipTitle(e.target.value)}
                   placeholder="Source title (optional)"
-                  className="rounded-lg border border-[#E2E5EC] bg-[#F6F7F9] px-2.5 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:border-[#0F62FE] focus:bg-white focus:outline-none"
+                  className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2.5 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:border-[#1f2937] focus:bg-white focus:outline-none"
                 />
                 <input
                   type="url"
                   value={clipUrl}
                   onChange={(e) => setClipUrl(e.target.value)}
                   placeholder="Source URL (optional)"
-                  className="rounded-lg border border-[#E2E5EC] bg-[#F6F7F9] px-2.5 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:border-[#0F62FE] focus:bg-white focus:outline-none"
+                  className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2.5 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:border-[#1f2937] focus:bg-white focus:outline-none"
                 />
               </div>
             </div>
@@ -989,14 +1349,14 @@ function WeaveWorkspace() {
               <button
                 type="button"
                 onClick={() => setClipModalOpen(false)}
-                className="rounded-lg border border-[#E2E5EC] px-3 py-1.5 text-xs font-medium text-[#4B5563] hover:text-[#111827]"
+                className="rounded-lg border border-[#E5E7EB] px-3 py-1.5 text-xs font-medium text-[#4B5563] hover:text-[#111827]"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isExtractingClip || !clipText.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F62FE] px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f2937] px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
               >
                 {isExtractingClip ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1010,13 +1370,13 @@ function WeaveWorkspace() {
         </div>
       )}
 
-      {/* Shortcuts Guide Modal */}
+      {/* Workspace Guide Modal */}
       {showShortcuts && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20">
-          <div className="w-full max-w-sm rounded-2xl border border-[#E2E5EC] bg-white p-5 shadow-xl">
+          <div className="w-full max-w-sm rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-xl">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-[#111827]">
-                Workspace Controls
+                Workspace Guide
               </h3>
               <button
                 onClick={() => setShowShortcuts(false)}
@@ -1026,17 +1386,17 @@ function WeaveWorkspace() {
               </button>
             </div>
             <ul className="space-y-2 text-xs text-[#4B5563]">
-              <li>• <strong>V / H:</strong> Switch between Box-Select cursor and Hand Pan tool.</li>
-              <li>• <strong>Drag card edge dots:</strong> Connect any card to any other card.</li>
-              <li>• <strong>Right-click canvas or card:</strong> Quick actions menu.</li>
-              <li>• <strong>Double-click card or canvas:</strong> Edit inline or spawn a note.</li>
+              <li>• <strong>V / H:</strong> Switch between Select cursor and Hand Pan tool.</li>
+              <li>• <strong>Type / inside a note:</strong> Insert headings, checklists, quotes, or Ask AI.</li>
+              <li>• <strong>Right-click any connector line:</strong> Set relationship (<em>supports, contradicts, leads to, analogy</em>).</li>
+              <li>• <strong>Hover or select any card:</strong> Change tint color, resize corners, Ask AI, or open in Full Editor.</li>
               <li>• <strong>Select Frame or multiple cards:</strong> Click <em>Synthesize Full Note</em>.</li>
             </ul>
           </div>
         </div>
       )}
 
-      {/* Light Whitish-Gray Infinite Canvas */}
+      {/* Smooth #F9FAFB Infinite Canvas (No Grid) */}
       <ReactFlow
         nodes={decoratedNodes}
         edges={edges}
@@ -1047,6 +1407,7 @@ function WeaveWorkspace() {
         onConnect={onConnect}
         onPaneContextMenu={handlePaneContextMenu}
         onNodeContextMenu={handleNodeContextMenu}
+        onEdgeContextMenu={handleEdgeContextMenu}
         onPaneClick={(e) => {
           setContextMenu(null);
           if (e.detail === 2) createBlankNote();
@@ -1058,14 +1419,7 @@ function WeaveWorkspace() {
         minZoom={0.2}
         maxZoom={2}
         deleteKeyCode={["Backspace", "Delete"]}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={22}
-          size={1.1}
-          color="#D1D5DB"
-        />
-      </ReactFlow>
+      />
     </div>
   );
 }

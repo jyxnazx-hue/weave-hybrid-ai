@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Weave — Hybrid AI Spatial Research",
+  "version": "1.0.0",
+  "description": "Local-first spatial research canvas and Chrome side panel powered by Gemini Nano and Firebase AI Logic.",
+  "permissions": ["sidePanel", "activeTab", "scripting", "contextMenus", "storage"],
+  "action": {
+    "default_title": "Open Weave Side Panel (Alt+W)"
+  },
+  "side_panel": {
+    "default_path": "index.html?mode=sidepanel"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "capture-selection": {
+      "suggested_key": {
+        "default": "Alt+W"
+      },
+      "description": "Capture highlighted text to Weave Side Panel"
+    }
+  }
+}
